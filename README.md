@@ -1,4 +1,4 @@
-# WIP
+# WIP !
 # Voices Unheard: NLP Resources and Models for Yorùbá Regional Dialects
 
 This repository contains the code for the paper, Link to paper - []().
