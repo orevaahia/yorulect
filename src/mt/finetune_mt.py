@@ -155,12 +155,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     model_checkpoint = args.checkpoint if args.checkpoint else "facebook/nllb-200-distilled-600M"
+    os.makedirs(args.model_output_dir, exist_ok=True)
 
     if args.wandb:
         os.environ["WANDB_PROJECT"] = "yoruba-dialects" 
 
     bleu_metric = evaluate.load("sacrebleu")
-    model_path = download_model("masakhane/africomet-mtl")
+    model_path = download_model("masakhane/africomet-mtl", saving_directory=args.cache_dir)
     comet_model = load_from_checkpoint(model_path)
 
     # add new dialect if training dialect

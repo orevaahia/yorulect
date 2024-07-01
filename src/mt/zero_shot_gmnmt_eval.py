@@ -1,23 +1,54 @@
-import evaluate
+import os
 import argparse
 import json
-import os
 import pandas as pd
+import evaluate
 import torch
-import warnings
-from transformers import pipeline
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from comet import download_model, load_from_checkpoint
+from google.cloud import translate
+from tqdm import tqdm
 
-warnings.filterwarnings('ignore')
+
 NO_OF_GPUs = torch.cuda.device_count()
 
-def translate(source_column, data_df, pipe_fn):
-    data_df[f"{source_column} translation"] = data_df[source_column].apply(lambda x: pipe_fn(x, max_new_tokens=256)[0]["translation_text"])
 
-    print(f"Finished translating {source_column}")
-    print(f"Computing metrics for {source_column}")
+def request_gmnmt(text, project_id):
+    client = translate.TranslationServiceClient()
+    
+    location = "global"
+    model_id = "general/nmt"    # requesting NMT model
+    parent = f"projects/{project_id}/locations/{location}"
+    model_path = f"{parent}/models/{model_id}"
 
+    response = client.translate_text(
+        request={
+            "parent": parent,
+            "contents": text,
+            "model": model_path,
+            "mime_type": "text/plain",  
+            "source_language_code": "yo",
+            "target_language_code": "en-US",
+        }
+    )
+    
+    return response
+
+
+# sends batched requests to GMNMT
+def get_translations(text, project_id, batch_size=10):
+    translations = []
+    for i in tqdm(range(0, len(text), batch_size)):
+        j = i + batch_size if i + batch_size < len(text) else None
+        batch = text[i:j]
+
+        response = request_gmnmt(batch, project_id=project_id)
+        translations += [x.translated_text for x in response.translations]
+    
+    return translations
+
+
+def do_evaluate(source_column, data_df):
+    # Sentence level metrics
     data_df[f"{source_column} bleu"] = data_df.apply(lambda x: sacrebleu.compute(predictions = [x[f"{source_column} translation"]], references=  [x["english_text"]])["score"], axis=1  )
     data_df[f"{source_column} chrf"] = data_df.apply(lambda x: chrf.compute(predictions = [x[f"{source_column} translation"]], references=  [x["english_text"]])["score"], axis=1  )
 
@@ -36,50 +67,40 @@ def translate(source_column, data_df, pipe_fn):
     chrf_score = chrf.compute(predictions=translations, references=references)["score"]
 
     return data_df, bleu_score, chrf_score, comet_score[1]
+        
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Translate text with MT models (e.g. NLLB and M2M100).")
-    parser.add_argument("--model_name", type=str, required=True, help="The HuggingFace model name.")
+    parser = argparse.ArgumentParser(description="Translate text with Google NMT.")
+    parser.add_argument("--project_id", type=str, required=True, help="Project ID on Google Cloud (note that GOOGLE_API_KEY environment variable must be set).")
     parser.add_argument("--test_set", type=str, required=True, help="The source text to evaluate.")
-    parser.add_argument("--cache_dir", type=str, required=False, help="Cache_directory.")
-    parser.add_argument("--output_dir", type=str, required=True, help="Output directory to save files .")
+    parser.add_argument("--cache_dir", type=str, required=True, help="Cache_directory.")
+    parser.add_argument("--output_dir", type=str, required=True, help="Output directory to save files.")
 
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Load comet model and metric
-    comet_model_path = download_model("masakhane/africomet-mtl", saving_directory=args.cache_dir)
-    comet_model = load_from_checkpoint(comet_model_path)
-
-    # model kwargs
-    if "m2m100" in args.model_name:
-        model_kwargs = {"src_lang": "yo", "tgt_lang": "en"}
-    elif "Davlan" in args.model_name:   # menyo model
-        model_kwargs = {"max_length": 400}
-    else:
-        model_kwargs = {"src_lang": "yor_Latn", "tgt_lang": "eng_Latn"}
-
-    # Load models and tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, cache_dir=args.cache_dir)
-    model = AutoModelForSeq2SeqLM.from_pretrained(args.model_name, cache_dir=args.cache_dir)
-
-    pipe = pipeline("translation", model=model, tokenizer=tokenizer, device_map="auto", **model_kwargs)
-
-    # Load Dataset (We only need the test set)
-    test_data = pd.read_csv(args.test_set)
+    os.environ["GOOGLE_CLOUD_PROJECT"] = args.project_id
 
     # Load metrics
+    comet_model_path = download_model("masakhane/africomet-mtl", saving_directory=args.cache_dir)
+    comet_model = load_from_checkpoint(comet_model_path)
     chrf = evaluate.load("chrf", cache_dir=args.cache_dir)
     sacrebleu = evaluate.load("sacrebleu", cache_dir=args.cache_dir)
 
+    test_data = pd.read_csv(args.test_set)
+    
     metric_dict = {}
-    # Translate
-    #for column in ['Standard Yoruba', 'Ife Dialect', 'Ijebu Dialect', 'Ilaje Dialect']:
     for column in ['std_text', 'ife_text', 'ilaje_text', 'ijebu_text']:
         dialect_name = "_".join(column.split(" "))
+
+        test_data[f"{dialect_name} translation"] = get_translations(test_data[dialect_name], args.project_id)
+
+        print(f"Finished translating {dialect_name}")
+        print(f"Computing metrics for {dialect_name}")
+
         # Compute BlEU / COMET/ CHRF and save metrics
-        _, bleu_corpus, chrf_corpus, comet_corpus = translate(source_column=column, data_df=test_data, pipe_fn=pipe)
+        _, bleu_corpus, chrf_corpus, comet_corpus = do_evaluate(source_column=column, data_df=test_data)
 
         # Corpus bleu / chrf / comet
         metric_dict[f"{dialect_name}_bleu"] = bleu_corpus
@@ -89,13 +110,11 @@ if __name__ == "__main__":
         print(f"Finished with {column}")
 
     # Save new df and save metrics
-    model_name = args.model_name.split("/")[1]
+    model_name = "gmnmt"
     test_data.to_csv(f"{args.output_dir}/{model_name}_translations.csv", index=False)
 
     # Store the corpus-level scores in a JSON file
     output_file = os.path.join(args.output_dir, f'{model_name}_scores.json')
     with open(output_file, 'w') as json_file:
         json.dump(metric_dict, json_file, indent=2)
-
-
 
