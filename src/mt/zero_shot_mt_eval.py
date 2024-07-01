@@ -5,16 +5,15 @@ import os
 import pandas as pd
 import torch
 import warnings
-
 from transformers import pipeline
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from comet import download_model, load_from_checkpoint
 
+warnings.filterwarnings('ignore')
 NO_OF_GPUs = torch.cuda.device_count()
 
-def translate(source_column, data_df, prompt, pipe_fn):
-    data_df[f"{source_column} prompt"] = data_df[source_column].apply(lambda x: f"{prompt}: "+ x)
-    data_df[f"{source_column} translation"] = data_df[f"{source_column} prompt"].apply(lambda x: pipe_fn(x, max_new_tokens=256)[0]["generated_text"])
+def translate(source_column, data_df, pipe_fn):
+    data_df[f"{source_column} translation"] = data_df[source_column].apply(lambda x: pipe_fn(x, max_new_tokens=256)[0]["translation_text"])
 
     print(f"Finished translating {source_column}")
     print(f"Computing metrics for {source_column}")
@@ -30,7 +29,6 @@ def translate(source_column, data_df, prompt, pipe_fn):
     comet_dict = [{"src": s, "mt": m, "ref": r} for s, m, r in zip(sources, translations, references)]
     comet_score = comet_model.predict(comet_dict, batch_size=8, gpus=NO_OF_GPUs)
 
-
     data_df[f"{source_column} comet"] = comet_score[0]
 
     # Compute Corpus Bleu and Chrf
@@ -44,25 +42,31 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Translate text with LLMS.")
     parser.add_argument("--model_name", type=str, required=True, help="The HuggingFace model name.")
     parser.add_argument("--test_set", type=str, required=True, help="The source text to evaluate.")
-    parser.add_argument("--cache_dir", type=str, required=True, help="Cache_directory.")
+    parser.add_argument("--cache_dir", type=str, required=False, help="Cache_directory.")
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory to save files .")
 
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Load models and tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, cache_dir=args.cache_dir)
-    model = AutoModelForSeq2SeqLM.from_pretrained(args.model_name, cache_dir=args.cache_dir)
-
     # Load comet model and metric
     comet_model_path = download_model("masakhane/africomet-mtl", saving_directory=args.cache_dir)
     comet_model = load_from_checkpoint(comet_model_path)
 
-    #pipe = pipeline("text2text-generation", model=args.model_name,  device_map="auto", model_kwargs={"cache_dir":args.cache_dir})
-    pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer, device_map="auto")
+    # model kwargs
+    if "m2m100" in args.model_name:
+        model_kwargs = {"src_lang": "yo", "tgt_lang": "en"}
+    elif "Davlan" in args.model_name:   # menyo model
+        model_kwargs = {"max_length": 400}
+    else:
+        model_kwargs = {"src_lang": "yor_Latn", "tgt_lang": "eng_Latn"}
 
+    # Load models and tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, cache_dir=args.cache_dir)
+    model = AutoModelForSeq2SeqLM.from_pretrained(args.model_name, cache_dir=args.cache_dir)
 
-    # Load Dataset (We only need the test set )
+    pipe = pipeline("translation", model=model, tokenizer=tokenizer, device_map="auto", **model_kwargs)
+
+    # Load Dataset (We only need the test set)
     test_data = pd.read_csv(args.test_set)
 
     # Load metrics
@@ -74,10 +78,8 @@ if __name__ == "__main__":
     #for column in ['Standard Yoruba', 'Ife Dialect', 'Ijebu Dialect', 'Ilaje Dialect']:
     for column in ['std_text', 'ife_text', 'ilaje_text', 'ijebu_text']:
         dialect_name = "_".join(column.split(" "))
-        #translate(source_column=column, data_df=test_data, prompt="Translate to English: ")
         # Compute BlEU / COMET/ CHRF and save metrics
-        _, bleu_corpus, chrf_corpus, comet_corpus = translate(source_column=column, data_df=test_data, prompt="Translate to English: ", pipe_fn=pipe)
-
+        _, bleu_corpus, chrf_corpus, comet_corpus = translate(source_column=column, data_df=test_data, pipe_fn=pipe)
 
         # Corpus bleu / chrf / comet
         metric_dict[f"{dialect_name}_bleu"] = bleu_corpus
