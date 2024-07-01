@@ -28,8 +28,11 @@ pip install -r requirements.txt
 # zero-shot evaluation of Aya and MT0
 bash scripts/mt/zero_shot_lm.sh
 
-# zero-shot evaluation of NLLB, M2M-100 and Google translate
+# zero-shot evaluation of NLLB and M2M-100
+bash scripts/mt/zero_shot_mt.sh
 
+# zero-shot evaluation of Google Translate
+bash scripts/mt/zero_shot_gmnmt.sh
 ```
 
 ### Finetuning [NLLB](https://huggingface.co/facebook/nllb-200-distilled-600M) :
