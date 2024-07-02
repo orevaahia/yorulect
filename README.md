@@ -1,7 +1,7 @@
 # WIP !
 # Voices Unheard: NLP Resources and Models for Yorùbá Regional Dialects
 
-This repository contains the code for the paper, Link to paper - []().
+This repository contains the code for the paper, Link to - [paper](https://arxiv.org/pdf/2406.19564).
 
 
 ## 1. Data
@@ -55,4 +55,17 @@ bash scripts/speech/finetune_mms_asr.sh
 bash scripts/speech/finetune_xslr_asr.sh
 ```
 
-## Citation:
+## Citation 
+If you use this dataset, please cite our work.
+
+```bibtex
+@misc{ahia2024voicesunheardnlpresources,
+      title={Voices Unheard: NLP Resources and Models for Yor\`ub\'a Regional Dialects}, 
+      author={Orevaoghene Ahia and Anuoluwapo Aremu and Diana Abagyan and Hila Gonen and David Ifeoluwa Adelani and Daud Abolade and Noah A. Smith and Yulia Tsvetkov},
+      year={2024},
+      eprint={2406.19564},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2406.19564}, 
+}
+```
